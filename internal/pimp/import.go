@@ -107,7 +107,7 @@ func (plan ImportPlan) Execute() error {
 				log.Errorln(string(result))
 				return err
 			}
-			log.Infoln("load %s: done", resourceId)
+			log.Infoln("load", resourceId, ": done")
 			log.Infoln(string(result))
 			return nil
 		}

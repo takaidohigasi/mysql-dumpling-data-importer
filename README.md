@@ -13,3 +13,7 @@ Flags:
   -h, --help              help for import
       --path string       path for dumpling data (default "/Users/taka-h/git/mysql-dumpling-data-importer")
 ```
+
+## prerequisite
+
+* MySQL server: @@global.local-infile should be configured to ON

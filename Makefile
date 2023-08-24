@@ -12,8 +12,8 @@ test:
 	# MallocNanoZone=0 is workaround for SIGABRT with race on macOS Monterey: https://github.com/golang/go/issues/49138
 	MallocNanoZone=0 go test -v -race -cover ./...
 
-linux: 
-        CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -trimpath -o ./dist/$(BINARY_NAME) main.go
+linux:
+	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -trimpath -o ./dist/$(BINARY_NAME) main.go
 
 build: clean
 	CGO_ENABLED=1 GOARCH=amd64 go build $(LDFLAGS) -trimpath -o ./dist/$(BINARY_NAME) main.go
