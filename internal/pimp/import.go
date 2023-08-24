@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -30,19 +31,21 @@ type ImportPlan struct {
 	concurrency int
 	dbConfig    string
 	context     context.Context
+	totalFile   int
 }
 
 func NewImportPlan(ctx context.Context, path string, concurrency int, dbConfig string) Plan {
-	return ImportPlan{
+	return &ImportPlan{
 		context:     ctx,
 		data:        make(map[string]*ImportData),
 		path:        path,
 		concurrency: concurrency,
 		dbConfig:    dbConfig,
+		totalFile:   0,
 	}
 }
 
-func (plan ImportPlan) Estimate() error {
+func (plan *ImportPlan) Estimate() error {
 	log.Infoln("estimating import data")
 	totalFiles := 0
 	err := filepath.Walk(plan.path, func(path string, info os.FileInfo, err error) error {
@@ -82,10 +85,11 @@ func (plan ImportPlan) Estimate() error {
 	})
 	log.Infoln("estimating import data: done")
 	log.Infoln("total files: ", totalFiles)
+	plan.totalFile = totalFiles
 	return err
 }
 
-func (plan ImportPlan) Execute() error {
+func (plan *ImportPlan) Execute() error {
 	log.Infoln("importing data")
 	wp := NewWorkerPool(plan.concurrency/4, plan.concurrency)
 	wp.Run()
@@ -117,6 +121,15 @@ func (plan ImportPlan) Execute() error {
 		}
 		wp.AddTask(Job{Task: task, Thread: thread, Length: v.FileNum, ResourceId: k, Data: v})
 	}
+
+	// status report
+	go func() {
+		for {
+			time.Sleep(60 * time.Second)
+			concurrency, completed := wp.Progress()
+			log.Println("current concurrency:", concurrency, "progress", completed, "/", plan.totalFile)
+		}
+	}()
 	wp.Wait()
 	log.Infoln("importing data: done")
 	return nil

@@ -11,10 +11,10 @@ import (
 	"syscall"
 
 	_ "github.com/go-sql-driver/mysql"
+	log "github.com/sirupsen/logrus"
 	"github.com/sjmudd/mysql_defaults_file"
 	"github.com/spf13/cobra"
 	"github.com/takaidohigasi/mysql-dumpling-data-importer/internal/pimp"
-	log "github.com/sirupsen/logrus"
 )
 
 // importCmd represents the import command
@@ -114,7 +114,7 @@ func importRun(cmd *cobra.Command, args []string) error {
 
 	plan := pimp.NewImportPlan(ctx, path, concurrency, dbConfig)
 
-	if err = plan.Estimate(); err != nil {
+	if err := plan.Estimate(); err != nil {
 		return err
 	}
 

@@ -1,8 +1,9 @@
 package pimp
 
 import (
-	log "github.com/sirupsen/logrus"
 	"sync"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type Job struct {
@@ -17,6 +18,7 @@ type WorkerPool interface {
 	Run()
 	AddTask(Job)
 	Wait()
+	Progress() (int, int)
 }
 
 type workerPool struct {
@@ -76,6 +78,10 @@ func (wp *workerPool) run() {
 			}
 		}(wID)
 	}
+}
+
+func (wp *workerPool) Progress() (concurrency int, completed int) {
+	return wp.progress.concurrency, wp.progress.completed
 }
 
 func NewWorkerPool(maxWorker int, maxCPU int) WorkerPool {
