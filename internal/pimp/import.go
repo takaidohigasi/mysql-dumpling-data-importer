@@ -11,10 +11,10 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+//	"github.com/k0kubun/pp/v3"
 )
 
-type ImportData struct {
-	DbName    string
+type ImportData struct { DbName    string
 	TableName string
 	FileNum   int
 	ImportCmd string
@@ -46,9 +46,7 @@ func NewImportPlan(ctx context.Context, path string, concurrency int, dbConfig s
 		totalFile:   0,
 	}
 }
-
-func (plan *ImportPlan) Estimate() error {
-	log.Infoln("estimating import data")
+func (plan *ImportPlan) Estimate() error { log.Infoln("estimating import data")
 	totalFiles := 0
 	err := filepath.Walk(plan.path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -66,22 +64,16 @@ func (plan *ImportPlan) Estimate() error {
 			resourceId := db + "." + table
 			plan.data[resourceId] = &ImportData{DbName: db, TableName: table}
 			data := plan.data[resourceId]
-			combinedColumnNames, err := ExtractColumns(path)
+			tableDef, err := ExtractTableDef(path)
 			if err != nil {
 				log.Errorln("failed to read table definition", err, path)
 				return err
 			}
-                        val, err := AutoIncrement(path)
-			if err != nil {
-                                log.Errorln("failed to read table definition", err, path)
-                                return err	
-			}
-			log.Println(val)
-			if val != 0 {
-				data.AlterStmt = fmt.Sprintf("ALTER TABLE %s AUTO_INCREMENT=%d;", resourceId, val)
+			if tableDef.AutoIncrement != 0 {
+				data.AlterStmt = fmt.Sprintf("ALTER TABLE %s FORCE AUTO_INCREMENT=%d;", resourceId, tableDef.AutoIncrement)
 			}
 			// @see https://dev.mysql.com/doc/mysql-shell/8.0/en/mysql-shell-utilities-parallel-table.html
-			data.ImportCmd = fmt.Sprintf("mysqlsh -- util import-table %s --schema=%s --table=%s --skipRows=1 --columns=%s --dialect=csv --threads=1", plan.path+"/"+resourceId+".*.csv", db, table, combinedColumnNames)
+			data.ImportCmd = fmt.Sprintf("mysqlsh -- util import-table %s --schema=%s --table=%s --skipRows=1 --columns=%s --dialect=csv --showProgress=false", plan.path+"/"+resourceId+".*.csv", db, table, strings.Join(tableDef.Columns, ","))
 		}
 
 		if strings.HasSuffix(info.Name(), ".csv") {
@@ -115,8 +107,9 @@ func (plan *ImportPlan) Execute() error {
 				log.Errorln(string(result))
 				return err
 			}
-			log.Infoln(data.ImportCmd)
-			args := strings.Fields(data.ImportCmd)
+                        log.Infoln(data.ImportCmd + " --sessionInitSql='SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;'")
+                        args := strings.Fields(data.ImportCmd)
+			args = append(args, "--sessionInitSql='SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;'")
 			result, err = exec.CommandContext(plan.context, args[0], args[1:]...).CombinedOutput()
 			if err != nil {
 				log.Errorln(string(result))
@@ -126,15 +119,13 @@ func (plan *ImportPlan) Execute() error {
 			log.Infoln(string(result))
 			return nil
 		}
-		// thread >= 2 didn't work as expected for mysqlsh for dumpling data
-		thread := 1
-		wp.AddTask(Job{Task: task, Thread: thread, Length: v.FileNum, ResourceId: k, Data: v})
+		wp.AddTask(Job{Task: task, Length: v.FileNum, ResourceId: k, Data: v})
 	}
 
 	// status report
 	go func() {
 		for {
-			time.Sleep(60 * time.Second)
+			time.Sleep(1 * time.Second)
 			concurrency, completed := wp.Progress()
 			log.Println("current concurrency:", concurrency, "progress", completed, "/", plan.totalFile)
 		}
@@ -143,6 +134,7 @@ func (plan *ImportPlan) Execute() error {
 	log.Infoln("importing data: done")
 	return nil
 }
+
 func (plan *ImportPlan) PrintCmd() {
         for _, v := range plan.data {
 		fmt.Println(v.ImportCmd)
