@@ -107,9 +107,9 @@ func (plan *ImportPlan) Execute() error {
 				log.Errorln(string(result))
 				return err
 			}
-                        log.Infoln(data.ImportCmd + " --sessionInitSql='SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;'")
+                        log.Infoln(data.ImportCmd + " --sessionInitSql='SET SESSION sql_log_bin=false;'")
                         args := strings.Fields(data.ImportCmd)
-			args = append(args, "--sessionInitSql='SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;'")
+			args = append(args, "--sessionInitSql='SET SESSION sql_log_bin=false;'")
 			result, err = exec.CommandContext(plan.context, args[0], args[1:]...).CombinedOutput()
 			if err != nil {
 				log.Errorln(string(result))
@@ -123,14 +123,28 @@ func (plan *ImportPlan) Execute() error {
 	}
 
 	// status report
+	ticker := time.NewTicker(60 * time.Second)
+	done := make(chan bool)
+
 	go func() {
+		startTime := time.Now()
 		for {
-			time.Sleep(1 * time.Second)
-			concurrency, completed := wp.Progress()
-			log.Println("current concurrency:", concurrency, "progress", completed, "/", plan.totalFile)
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				elasped := int(time.Since(startTime).Minutes())
+				concurrency, completed := wp.Progress()
+				eta := startTime.Add(time.Duration(int(elasped * completed / plan.totalFile)) * time.Minute)
+				log.Println("current concurrency:", concurrency, ", progress", completed, "/", plan.totalFile, ", ETA:", eta)
+			}
 		}
 	}()
 	wp.Wait()
+
+	ticker.Stop()
+	done <- true
+
 	log.Infoln("importing data: done")
 	return nil
 }
