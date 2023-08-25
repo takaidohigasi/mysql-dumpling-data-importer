@@ -18,6 +18,7 @@ type ImportData struct {
 	TableName string
 	FileNum   int
 	ImportCmd string
+	AlterStmt string
 }
 
 type Plan interface {
@@ -69,6 +70,15 @@ func (plan *ImportPlan) Estimate() error {
 			if err != nil {
 				log.Errorln("failed to read table definition", err, path)
 				return err
+			}
+                        val, err := AutoIncrement(path)
+			if err != nil {
+                                log.Errorln("failed to read table definition", err, path)
+                                return err	
+			}
+			log.Println(val)
+			if val != 0 {
+				data.AlterStmt = fmt.Sprintf("ALTER TABLE %s AUTO_INCREMENT=%d;", resourceId, val)
 			}
 			// @see https://dev.mysql.com/doc/mysql-shell/8.0/en/mysql-shell-utilities-parallel-table.html
 			data.ImportCmd = fmt.Sprintf("mysqlsh -- util import-table %s --schema=%s --table=%s --skipRows=1 --columns=%s --dialect=csv --threads=1", plan.path+"/"+resourceId+".*.csv", db, table, combinedColumnNames)
@@ -136,5 +146,6 @@ func (plan *ImportPlan) Execute() error {
 func (plan *ImportPlan) PrintCmd() {
         for _, v := range plan.data {
 		fmt.Println(v.ImportCmd)
+		fmt.Println(v.AlterStmt)
 	}
 }
