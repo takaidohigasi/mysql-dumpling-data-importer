@@ -67,14 +67,14 @@ func (wp *workerPool) run() {
 		wID := i + 1
 		go func(workerID int) {
 			for task := range wp.queuedTaskC {
-				if wp.maxCPU-wp.progress.concurrency >= task.Thread {
+//				if wp.maxCPU-wp.progress.concurrency >= task.Thread {
 					wp.progress.start(task.Thread)
 					if err := task.Task(task.ResourceId, task.Data); err != nil {
 						log.Infoln("error", err)
 					}
 					wp.progress.finish(task.Thread, task.Length)
 					wp.wg.Done()
-				}
+//				}
 			}
 		}(wID)
 	}
