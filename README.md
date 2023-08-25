@@ -12,6 +12,7 @@ Flags:
       --dbconfig string   default my.cnf path (default "/Users/taka-h/.my.cnf")
   -h, --help              help for import
       --path string       path for dumpling data (default "/Users/taka-h/git/mysql-dumpling-data-importer")
+  -d, --printonly         print mysqlsh commands
 ```
 
 ## prerequisite

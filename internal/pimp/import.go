@@ -23,6 +23,7 @@ type ImportData struct {
 type Plan interface {
 	Estimate() error
 	Execute() error
+	PrintCmd()
 }
 
 type ImportPlan struct {
@@ -133,4 +134,9 @@ func (plan *ImportPlan) Execute() error {
 	wp.Wait()
 	log.Infoln("importing data: done")
 	return nil
+}
+func (plan *ImportPlan) PrintCmd() {
+        for _, v := range plan.data {
+		fmt.Println(v.ImportCmd)
+	}
 }
