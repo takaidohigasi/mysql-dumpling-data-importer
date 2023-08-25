@@ -71,7 +71,7 @@ func (plan *ImportPlan) Estimate() error {
 				return err
 			}
 			// @see https://dev.mysql.com/doc/mysql-shell/8.0/en/mysql-shell-utilities-parallel-table.html
-			data.ImportCmd = fmt.Sprintf("mysqlsh -- util import-table %s --schema=%s --table=%s --skipRows=1 --columns=%s --dialect=csv threads=1", plan.path+"/"+resourceId+".*.csv", db, table, combinedColumnNames)
+			data.ImportCmd = fmt.Sprintf("mysqlsh -- util import-table %s --schema=%s --table=%s --skipRows=1 --columns=%s --dialect=csv --threads=1", plan.path+"/"+resourceId+".*.csv", db, table, combinedColumnNames)
 		}
 
 		if strings.HasSuffix(info.Name(), ".csv") {
