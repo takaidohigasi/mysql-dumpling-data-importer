@@ -35,6 +35,7 @@ func init() {
 		path        string
 		concurrency int
 		dbConfig    string
+		printOnly   bool
 	)
 
 	pwd, err := os.Getwd()
@@ -48,6 +49,7 @@ func init() {
 	importCmd.Flags().StringVar(&path, "path", pwd, "path for dumpling data")
 	importCmd.Flags().IntVarP(&concurrency, "concurrency", "c", defaultConcurrency, "max concurrency to load data")
 	importCmd.Flags().StringVar(&dbConfig, "dbconfig", userHome+"/.my.cnf", "default my.cnf path")
+	importCmd.Flags().BoolVarP(&printOnly, "printonly", "d", false, "print mysqlsh commands")
 
 	log.SetFormatter(&log.TextFormatter{
 		DisableLevelTruncation: true,
@@ -64,6 +66,11 @@ func importRun(cmd *cobra.Command, args []string) error {
 	}
 
 	concurrency, err := cmd.Flags().GetInt("concurrency")
+	if err != nil {
+		return err
+	}
+
+	printOnly, err := cmd.Flags().GetBool("printonly")
 	if err != nil {
 		return err
 	}
@@ -118,12 +125,16 @@ func importRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	err = restoreSchema(ctx, path, dbConfig)
-	if err != nil {
-		return err
-	}
-	if err = plan.Execute(); err != nil {
-		return err
+	if printOnly {
+		plan.PrintCmd()
+	} else {
+		err = restoreSchema(ctx, path, dbConfig)
+		if err != nil {
+			return err
+		}
+		if err = plan.Execute(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
