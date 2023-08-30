@@ -8,7 +8,6 @@ import (
 
 type Job struct {
 	Task       func(string, *ImportData) error
-	Thread     int
 	Length     int
 	ResourceId string
 	Data       *ImportData
@@ -67,14 +66,18 @@ func (wp *workerPool) run() {
 		wID := i + 1
 		go func(workerID int) {
 			for task := range wp.queuedTaskC {
-//				if wp.maxCPU-wp.progress.concurrency >= task.Thread {
-					wp.progress.start(task.Thread)
+				taskThread := 8
+				if task.Data.FileNum < taskThread {
+					taskThread = task.Data.FileNum
+				}
+				if wp.maxCPU-wp.progress.concurrency >= taskThread {
+					wp.progress.start(taskThread)
 					if err := task.Task(task.ResourceId, task.Data); err != nil {
 						log.Infoln("error", err)
 					}
-					wp.progress.finish(task.Thread, task.Length)
+					wp.progress.finish(taskThread, task.Length)
 					wp.wg.Done()
-//				}
+				}
 			}
 		}(wID)
 	}
