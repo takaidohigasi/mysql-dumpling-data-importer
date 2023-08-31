@@ -126,20 +126,26 @@ func (plan *ImportPlan) Execute() error {
 	ticker := time.NewTicker(60 * time.Second)
 	done := make(chan bool)
 
-	go func() {
+	go func(plan *ImportPlan, p WorkerPool) {
 		startTime := time.Now()
+		prevCompleted := 0
+		completed := 0
+		eta := time.Now()
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
 				elasped := int(time.Since(startTime).Minutes())
-				concurrency, completed := wp.Progress()
-				eta := startTime.Add(time.Duration(int(elasped * completed / plan.totalFile)) * time.Minute)
-				log.Println("current concurrency:", concurrency, ", progress", completed, "/", plan.totalFile, ", ETA:", eta.Format("2006/01/02 15:04"))
+				prevCompleted = completed
+				concurrency, completed := p.Progress()
+				if completed != prevCompleted {
+					eta = startTime.Add(time.Duration(int(elasped * (plan.totalFile - completed) / completed)) * time.Minute)
+				}
+				log.Println("current concurrency:", concurrency, ", progress:", completed, "/", plan.totalFile, ", elasped:", elasped, ", ETA:", eta.Format("2006/01/02 15:04"))
 			}
 		}
-	}()
+	}(plan, wp)
 	wp.Wait()
 
 	ticker.Stop()
