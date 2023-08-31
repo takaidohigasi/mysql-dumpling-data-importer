@@ -73,17 +73,16 @@ func (wp *workerPool) run() {
 				if task.Data.FileNum < taskThread {
 					taskThread = task.Data.FileNum
 				}
-				for {
-					if wp.maxCPU-wp.progress.concurrency >= taskThread {
-						wp.progress.start(taskThread)
-						if err := task.Task(task.ResourceId, task.Data); err != nil {
-							log.Infoln("error", err)
-						}
-						wp.progress.finish(taskThread, task.Length)
-						wp.wg.Done()
-						break
+				if wp.maxCPU-wp.progress.concurrency >= taskThread {
+					wp.progress.start(taskThread)
+					if err := task.Task(task.ResourceId, task.Data); err != nil {
+						log.Infoln("error", err)
 					}
-					time.Sleep(time.Duration(rand.Intn(60)) * time.Second)
+					wp.progress.finish(taskThread, task.Length)
+					wp.wg.Done()
+				} else {
+					// re-enqueue
+					wp.AddTask(task)
 				}
 			}
 		}(wID, wp)
