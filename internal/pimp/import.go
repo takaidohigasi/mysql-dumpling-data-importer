@@ -96,7 +96,15 @@ func (plan *ImportPlan) Estimate() error {
 
 func (plan *ImportPlan) Execute() error {
 	log.Infoln("importing data")
-	wp := NewWorkerPool(plan.concurrency/4, plan.concurrency, plan.concurrency/2)
+	concurrency := 1
+	maxThreadPerCmd := 1
+	if int(plan.concurrency/4) > 0 {
+		concurrency = int(plan.concurrency / 4)
+	}
+	if int(plan.concurrency/2) > 0 {
+		maxThreadPerCmd = int(plan.concurrency / 2)
+	}
+	wp := NewWorkerPool(concurrency, plan.concurrency, maxThreadPerCmd)
 	wp.Run()
 	for k, v := range plan.data {
 		task := func(resourceId string, data *ImportData) error {
