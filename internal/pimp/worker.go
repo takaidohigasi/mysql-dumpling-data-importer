@@ -74,12 +74,13 @@ func (wp *workerPool) run() {
 				if wp.maxCPU-wp.progress.concurrency >= taskThread {
 					wp.progress.start(taskThread)
 					if err := task.Task(task.ResourceId, task.Data); err != nil {
-						log.Infoln("error", err)
+						log.Errorln("error", err)
 					}
 					wp.progress.finish(taskThread, task.Length)
 					wp.wg.Done()
 				} else {
 					// re-enqueue
+					log.Infoln("re-enqueued:", task.ResourceId, "required thread: ", taskThread, "available thread: ", wp.maxCPU-wp.progress.concurrency)
 					wp.AddTask(task)
 				}
 			}
