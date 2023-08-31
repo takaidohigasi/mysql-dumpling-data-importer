@@ -21,11 +21,12 @@ type WorkerPool interface {
 }
 
 type workerPool struct {
-	maxWorker   int
-	maxCPU      int
-	queuedTaskC chan Job
-	progress    Progress
-	wg          sync.WaitGroup
+	maxWorker          int
+	maxCPU             int
+	maxThreadPerWorker int
+	queuedTaskC        chan Job
+	progress           Progress
+	wg                 sync.WaitGroup
 }
 
 type Progress struct {
@@ -66,7 +67,7 @@ func (wp *workerPool) run() {
 		wID := i + 1
 		go func(workerID int, wp *workerPool) {
 			for task := range wp.queuedTaskC {
-				taskThread := 8
+				taskThread := wp.maxThreadPerWorker
 				if task.Data.FileNum < taskThread {
 					taskThread = task.Data.FileNum
 				}
@@ -87,13 +88,14 @@ func (wp *workerPool) Progress() (concurrency int, completed int) {
 	return wp.progress.concurrency, wp.progress.completed
 }
 
-func NewWorkerPool(maxWorker int, maxCPU int) WorkerPool {
+func NewWorkerPool(maxWorker int, maxCPU int, maxThreadPerWorker int) WorkerPool {
 	wp := &workerPool{
-		maxWorker:   maxWorker,
-		maxCPU:      maxCPU,
-		queuedTaskC: make(chan Job),
-		progress:    Progress{},
-		wg:          sync.WaitGroup{},
+		maxWorker:          maxWorker,
+		maxCPU:             maxCPU,
+		maxThreadPerWorker: maxThreadPerWorker,
+		queuedTaskC:        make(chan Job),
+		progress:           Progress{},
+		wg:                 sync.WaitGroup{},
 	}
 	return wp
 }
