@@ -1,9 +1,7 @@
 package pimp
 
 import (
-	"math/rand"
 	"sync"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 )
