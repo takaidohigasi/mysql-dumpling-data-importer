@@ -11,10 +11,11 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
-//	"github.com/k0kubun/pp/v3"
+	// "github.com/k0kubun/pp/v3"
 )
 
-type ImportData struct { DbName    string
+type ImportData struct {
+	DbName    string
 	TableName string
 	FileNum   int
 	ImportCmd string
@@ -46,7 +47,8 @@ func NewImportPlan(ctx context.Context, path string, concurrency int, dbConfig s
 		totalFile:   0,
 	}
 }
-func (plan *ImportPlan) Estimate() error { log.Infoln("estimating import data")
+func (plan *ImportPlan) Estimate() error {
+	log.Infoln("estimating import data")
 	totalFiles := 0
 	err := filepath.Walk(plan.path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -94,7 +96,15 @@ func (plan *ImportPlan) Estimate() error { log.Infoln("estimating import data")
 
 func (plan *ImportPlan) Execute() error {
 	log.Infoln("importing data")
-	wp := NewWorkerPool(plan.concurrency/4, plan.concurrency)
+	concurrency := 1
+	maxThreadPerCmd := 1
+	if int(plan.concurrency/4) > 0 {
+		concurrency = int(plan.concurrency / 4)
+	}
+	if int(plan.concurrency/2) > 0 {
+		maxThreadPerCmd = int(plan.concurrency / 2)
+	}
+	wp := NewWorkerPool(concurrency, plan.concurrency, maxThreadPerCmd)
 	wp.Run()
 	for k, v := range plan.data {
 		task := func(resourceId string, data *ImportData) error {
@@ -107,8 +117,8 @@ func (plan *ImportPlan) Execute() error {
 				log.Errorln(string(result))
 				return err
 			}
-                        log.Infoln(data.ImportCmd + " --sessionInitSql='SET SESSION sql_log_bin=false;'")
-                        args := strings.Fields(data.ImportCmd)
+			log.Infoln(data.ImportCmd + " --sessionInitSql='SET SESSION sql_log_bin=false;'")
+			args := strings.Fields(data.ImportCmd)
 			args = append(args, "--sessionInitSql='SET SESSION sql_log_bin=false;'")
 			result, err = exec.CommandContext(plan.context, args[0], args[1:]...).CombinedOutput()
 			if err != nil {
@@ -140,7 +150,7 @@ func (plan *ImportPlan) Execute() error {
 				prevCompleted = completed
 				concurrency, completed := p.Progress()
 				if completed != prevCompleted {
-					eta = startTime.Add(time.Duration(int(elasped * (plan.totalFile - completed) / completed)) * time.Minute)
+					eta = startTime.Add(time.Duration(int(elasped*(plan.totalFile-completed)/completed)) * time.Minute)
 				}
 				log.Println("current concurrency:", concurrency, ", progress:", completed, "/", plan.totalFile, ", elasped:", elasped, ", ETA:", eta.Format("2006/01/02 15:04"))
 			}
@@ -156,7 +166,7 @@ func (plan *ImportPlan) Execute() error {
 }
 
 func (plan *ImportPlan) PrintCmd() {
-        for _, v := range plan.data {
+	for _, v := range plan.data {
 		fmt.Println(v.ImportCmd)
 		fmt.Println(v.AlterStmt)
 	}
