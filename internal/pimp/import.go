@@ -135,8 +135,8 @@ func (plan *ImportPlan) Execute() error {
 			case <-ticker.C:
 				elasped := int(time.Since(startTime).Minutes())
 				concurrency, completed := p.Progress()
-				eta := startTime.Add(time.Duration(int(elasped * completed / plan.totalFile)) * time.Minute)
-				log.Println("current concurrency:", concurrency, ", progress:", completed, "/", plan.totalFile, ", ETA:", eta.Format("2006/01/02 15:04"))
+				eta := startTime.Add(time.Duration(int(elasped * (plan.totalFile - completed) / completed)) * time.Minute)
+				log.Println("current concurrency:", concurrency, ", progress:", completed, "/", plan.totalFile, ", elasped:", elasped, ", ETA:", eta.Format("2006/01/02 15:04"))
 			}
 		}
 	}(plan, wp)
