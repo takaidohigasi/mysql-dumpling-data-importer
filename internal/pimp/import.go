@@ -128,14 +128,20 @@ func (plan *ImportPlan) Execute() error {
 
 	go func(plan *ImportPlan, p WorkerPool) {
 		startTime := time.Now()
+		prevCompleted := 0
+		completed := 0
+		eta := time.Now()
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
 				elasped := int(time.Since(startTime).Minutes())
+				prevCompleted = completed
 				concurrency, completed := p.Progress()
-				eta := startTime.Add(time.Duration(int(elasped * (plan.totalFile - completed) / completed)) * time.Minute)
+				if completed != prevCompleted {
+					eta = startTime.Add(time.Duration(int(elasped * (plan.totalFile - completed) / completed)) * time.Minute)
+				}
 				log.Println("current concurrency:", concurrency, ", progress:", completed, "/", plan.totalFile, ", elasped:", elasped, ", ETA:", eta.Format("2006/01/02 15:04"))
 			}
 		}
