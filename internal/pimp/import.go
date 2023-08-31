@@ -136,7 +136,7 @@ func (plan *ImportPlan) Execute() error {
 				elasped := int(time.Since(startTime).Minutes())
 				concurrency, completed := wp.Progress()
 				eta := startTime.Add(time.Duration(int(elasped * completed / plan.totalFile)) * time.Minute)
-				log.Println("current concurrency:", concurrency, ", progress", completed, "/", plan.totalFile, ", ETA:", eta)
+				log.Println("current concurrency:", concurrency, ", progress", completed, "/", plan.totalFile, ", ETA:", eta.Format("2006/01/02 15:04"))
 			}
 		}
 	}()

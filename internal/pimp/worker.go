@@ -64,7 +64,7 @@ func (wp *workerPool) run() {
 	wp.progress.concurrency = 0
 	for i := 0; i < wp.maxWorker; i++ {
 		wID := i + 1
-		go func(workerID int) {
+		go func(workerID int, wp *workerPool) {
 			for task := range wp.queuedTaskC {
 				taskThread := 8
 				if task.Data.FileNum < taskThread {
@@ -79,7 +79,7 @@ func (wp *workerPool) run() {
 					wp.wg.Done()
 				}
 			}
-		}(wID)
+		}(wID, wp)
 	}
 }
 
