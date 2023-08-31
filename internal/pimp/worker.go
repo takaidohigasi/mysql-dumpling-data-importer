@@ -69,7 +69,7 @@ func (wp *workerPool) run() {
 		wID := i + 1
 		go func(workerID int, wp *workerPool) {
 			for task := range wp.queuedTaskC {
-				taskThread := wp.maxThreadPerWorker
+				taskThread := 8
 				if task.Data.FileNum < taskThread {
 					taskThread = task.Data.FileNum
 				}
@@ -100,7 +100,7 @@ func NewWorkerPool(maxWorker int, maxCPU int, maxThreadPerWorker int) WorkerPool
 		maxWorker:          maxWorker,
 		maxCPU:             maxCPU,
 		maxThreadPerWorker: maxThreadPerWorker,
-		queuedTaskC:        make(chan Job),
+		queuedTaskC:        make(chan Job, 1024),
 		progress:           Progress{},
 		wg:                 sync.WaitGroup{},
 	}
