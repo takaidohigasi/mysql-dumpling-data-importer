@@ -126,7 +126,7 @@ func (plan *ImportPlan) Execute() error {
 	ticker := time.NewTicker(60 * time.Second)
 	done := make(chan bool)
 
-	go func() {
+	go func(plan *ImportPlan, wp *workerPool) {
 		startTime := time.Now()
 		for {
 			select {
@@ -136,10 +136,10 @@ func (plan *ImportPlan) Execute() error {
 				elasped := int(time.Since(startTime).Minutes())
 				concurrency, completed := wp.Progress()
 				eta := startTime.Add(time.Duration(int(elasped * completed / plan.totalFile)) * time.Minute)
-				log.Println("current concurrency:", concurrency, ", progress", completed, "/", plan.totalFile, ", ETA:", eta.Format("2006/01/02 15:04"))
+				log.Println("current concurrency:", concurrency, ", progress:", completed, "/", plan.totalFile, ", ETA:", eta.Format("2006/01/02 15:04"))
 			}
 		}
-	}()
+	}(plan, wp)
 	wp.Wait()
 
 	ticker.Stop()
