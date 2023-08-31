@@ -1,7 +1,9 @@
 package pimp
 
 import (
+	"math/rand"
 	"sync"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -80,8 +82,9 @@ func (wp *workerPool) run() {
 					wp.wg.Done()
 				} else {
 					// re-enqueue
+					wp.queuedTaskC <- task
+					time.Sleep(time.Duration(rand.Intn(60)) * time.Second)
 					log.Infoln("re-enqueued:", task.ResourceId, "required thread: ", taskThread, "available thread: ", wp.maxCPU-wp.progress.concurrency)
-					wp.AddTask(task)
 				}
 			}
 		}(wID, wp)
