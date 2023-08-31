@@ -1,7 +1,9 @@
 package pimp
 
 import (
+	"math/rand"
 	"sync"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -71,13 +73,17 @@ func (wp *workerPool) run() {
 				if task.Data.FileNum < taskThread {
 					taskThread = task.Data.FileNum
 				}
-				if wp.maxCPU-wp.progress.concurrency >= taskThread {
-					wp.progress.start(taskThread)
-					if err := task.Task(task.ResourceId, task.Data); err != nil {
-						log.Infoln("error", err)
+				for {
+					if wp.maxCPU-wp.progress.concurrency >= taskThread {
+						wp.progress.start(taskThread)
+						if err := task.Task(task.ResourceId, task.Data); err != nil {
+							log.Infoln("error", err)
+						}
+						wp.progress.finish(taskThread, task.Length)
+						wp.wg.Done()
+						break
 					}
-					wp.progress.finish(taskThread, task.Length)
-					wp.wg.Done()
+					time.Sleep(time.Duration(rand.Intn(60)) * time.Second)
 				}
 			}
 		}(wID, wp)
