@@ -126,7 +126,7 @@ func (plan *ImportPlan) Execute() error {
 				if completed != prevCompleted {
 					eta = startTime.Add(time.Duration(int(elasped*(plan.totalFile-completed)/completed)) * time.Minute)
 				}
-				log.Println("current concurrency:", concurrency, ", progress:", completed, "/", plan.totalFile, ", elasped:", elasped, ", ETA:", eta.Format("2006/01/02 15:04"))
+				log.Println("current concurrency:", concurrency, ", progress:", completed, "/", plan.totalFile, ", elasped:", time.Since(startTime).String(), ", ETA:", eta.Format("2006/01/02 15:04"))
 			}
 		}
 	}(plan, wp)
