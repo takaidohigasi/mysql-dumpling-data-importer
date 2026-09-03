@@ -7,8 +7,8 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"syscall"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	log "github.com/sirupsen/logrus"
@@ -153,28 +153,28 @@ func importRun(cmd *cobra.Command, args []string) error {
 
 func restoreSchema(ctx context.Context, sqlDir string, dbConfig string) error {
 	log.Infoln("loading databases")
-	err := filepath.Walk(sqlDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.IsDir() {
-			return nil
-		}
+	started := time.Now()
 
-		if strings.HasSuffix(info.Name(), "-schema-create.sql") {
-			log.Infoln("importing", info.Name())
-			result, err := exec.Command("mysql", fmt.Sprintf("--defaults-extra-file=%s", dbConfig), "-e", fmt.Sprintf("source %s", path)).CombinedOutput()
-			if err != nil {
-				log.Errorf("%s: %s", err, result)
-				return err
-			}
-		}
-		return nil
-	})
+	// Glob rather than a walk: dumpling writes its output flat, so the
+	// database files are one directory read away. Walking instead meant
+	// lstatting every data file in the dump to find them, which on a
+	// FUSE-mounted bucket is one metadata request each and took eight
+	// minutes for a handful of matches.
+	paths, err := filepath.Glob(filepath.Join(sqlDir, "*-schema-create.sql"))
 	if err != nil {
 		return err
 	}
-	log.Infoln("loading databases: done")
+
+	for _, path := range paths {
+		log.Infoln("importing", filepath.Base(path))
+		result, err := exec.CommandContext(ctx, "mysql", fmt.Sprintf("--defaults-extra-file=%s", dbConfig), "-e", fmt.Sprintf("source %s", path)).CombinedOutput()
+		if err != nil {
+			log.Errorf("%s: %s", err, result)
+			return err
+		}
+	}
+
+	log.Infoln("loading databases: done in", time.Since(started).Truncate(time.Second), ", databases:", len(paths))
 
 	return nil
 }
