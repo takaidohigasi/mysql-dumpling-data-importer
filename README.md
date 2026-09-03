@@ -17,6 +17,9 @@ Flags:
 
 ## prerequisite
 
+`import` reads both from the target server at startup and refuses to run
+when either is not satisfied.
+
 * MySQL server:
     * [@@global.local-infile](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_local_infile) should be configured to ON
     * [@@globa.innodb_autoinc_lock_mode](https://dev.mysql.com/doc/refman/8.0/en/innodb-auto-increment-handling.html#innodb-auto-increment-lock-modes) should be configured to 2

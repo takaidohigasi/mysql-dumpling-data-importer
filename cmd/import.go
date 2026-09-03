@@ -96,6 +96,10 @@ func importRun(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	if err := pimp.CheckPrerequisites(dbh); err != nil {
+		return err
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
