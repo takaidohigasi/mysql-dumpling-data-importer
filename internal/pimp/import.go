@@ -4,13 +4,16 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/sjmudd/mysql_defaults_file"
 	// "github.com/k0kubun/pp/v3"
 )
 
@@ -29,8 +32,11 @@ type ImportData struct {
 	DbName    string
 	TableName string
 	FileNum   int
-	ImportCmd string
-	AlterStmt string
+	// ImportArgs is what actually runs. ImportCmd is the same thing rendered
+	// for display, with the password blanked so it stays out of the log.
+	ImportArgs []string
+	ImportCmd  string
+	AlterStmt  string
 }
 
 type Plan interface {
@@ -68,6 +74,9 @@ func (plan *ImportPlan) Estimate() error {
 	if !countFiles {
 		log.Infoln("data files will not be counted, using the given total:", plan.totalFile)
 	}
+	// The same defaults file the rest of the run uses, so mysqlsh connects
+	// where the schema load and the precheck did.
+	dbConfig := mysql_defaults_file.NewConfig(plan.dbConfig)
 	totalFiles := 0
 	// WalkDir, not Walk: the callback needs only the name and whether the
 	// entry is a directory, both of which the directory read already
@@ -99,7 +108,8 @@ func (plan *ImportPlan) Estimate() error {
 				data.AlterStmt = fmt.Sprintf("ALTER TABLE %s FORCE AUTO_INCREMENT=%d;", resourceId, tableDef.AutoIncrement)
 			}
 			// @see https://dev.mysql.com/doc/mysql-shell/8.0/en/mysql-shell-utilities-parallel-table.html
-			data.ImportCmd = fmt.Sprintf("mysqlsh -- util import-table %s --schema=%s --table=%s --skipRows=1 --columns=%s --dialect=csv --showProgress=false", plan.path+"/"+resourceId+".*.csv", db, table, strings.Join(tableDef.Columns, ","))
+			data.ImportArgs = importTableArgs(dbConfig, plan.path+"/"+resourceId+".*.csv", db, table, tableDef.Columns)
+			data.ImportCmd = maskPassword(data.ImportArgs)
 		}
 
 		if countFiles && strings.HasSuffix(entry.Name(), ".csv") {
@@ -184,10 +194,8 @@ func (plan *ImportPlan) Execute() error {
 				log.Errorln(string(result))
 				return err
 			}
-			log.Infoln(data.ImportCmd + " --sessionInitSql='SET SESSION sql_log_bin=false;'")
-			args := strings.Fields(data.ImportCmd)
-			args = append(args, "--sessionInitSql='SET SESSION sql_log_bin=false;'")
-			result, err = exec.CommandContext(plan.context, args[0], args[1:]...).CombinedOutput()
+			log.Infoln(data.ImportCmd)
+			result, err = exec.CommandContext(plan.context, data.ImportArgs[0], data.ImportArgs[1:]...).CombinedOutput()
 			if err != nil {
 				log.Errorln(string(result))
 				return err
@@ -212,4 +220,68 @@ func (plan *ImportPlan) PrintCmd() {
 		fmt.Println(v.ImportCmd)
 		fmt.Println(v.AlterStmt)
 	}
+}
+
+// defaultMySQLPort is used when the defaults file names a host but no port.
+const defaultMySQLPort = 3306
+
+// importTableArgs renders the argv for one table's parallel import.
+//
+// --mysql is what matters here: util import-table needs a classic protocol
+// session, and without it mysqlsh connects over X Protocol and refuses with
+// "A classic protocol session is required to perform this operation".
+//
+// The connection comes from the defaults file rather than being left to
+// mysqlsh's own defaults, so it lands on the same server as the schema load.
+func importTableArgs(config mysql_defaults_file.Config, glob string, db string, table string, columns []string) []string {
+	args := []string{"mysqlsh", "--mysql"}
+
+	// socket takes precedence over host, matching BuildDSN
+	if config.Socket != "" {
+		args = append(args, "--socket="+config.Socket)
+	} else {
+		host := config.Host
+		if host == "" {
+			host = "localhost"
+		}
+		port := int(config.Port)
+		if port == 0 {
+			port = defaultMySQLPort
+		}
+		args = append(args, "--host="+host, "--port="+strconv.Itoa(port))
+	}
+
+	user := config.User
+	if user == "" {
+		user = os.Getenv("USER")
+	}
+	// passed even when empty: --password with no value makes mysqlsh prompt,
+	// which would hang a worker with nothing attached to its stdin
+	args = append(args, "--user="+user, "--password="+config.Password)
+
+	return append(args,
+		"--", "util", "import-table", glob,
+		"--schema="+db,
+		"--table="+table,
+		"--skipRows=1",
+		"--columns="+strings.Join(columns, ","),
+		"--dialect=csv",
+		"--showProgress=false",
+		// sql_log_bin off so the import is not written to the binlog. Set
+		// here rather than appended by the caller: exec runs mysqlsh without
+		// a shell, so the value must not carry its own quotes.
+		"--sessionInitSql=SET SESSION sql_log_bin=false;",
+	)
+}
+
+// maskPassword renders argv for display with the password blanked.
+func maskPassword(args []string) string {
+	masked := make([]string, len(args))
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "--password=") {
+			arg = "--password=****"
+		}
+		masked[i] = arg
+	}
+	return strings.Join(masked, " ")
 }
