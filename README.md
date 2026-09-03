@@ -17,9 +17,11 @@ Flags:
 
 ## prerequisite
 
-`import` reads both from the target server at startup and refuses to run
-when either is not satisfied.
+`import` verifies all of these at startup and refuses to run when one of
+them is not satisfied.
 
+* [mysqlsh](https://dev.mysql.com/doc/mysql-shell/8.0/en/) 8.0.33 or newer
+    * earlier releases apply `skipRows` only to the first file of a multi-file `util import-table`, loading the remaining header rows as data
 * MySQL server:
     * [@@global.local-infile](https://dev.mysql.com/doc/refman/8.0/en/server-system-variables.html#sysvar_local_infile) should be configured to ON
     * [@@globa.innodb_autoinc_lock_mode](https://dev.mysql.com/doc/refman/8.0/en/innodb-auto-increment-handling.html#innodb-auto-increment-lock-modes) should be configured to 2
