@@ -148,14 +148,10 @@ func (plan *ImportPlan) Estimate() error {
 func (plan *ImportPlan) Execute() error {
 	log.Infoln("importing data")
 	concurrency := 1
-	maxThreadPerCmd := 1
 	if int(plan.concurrency/4) > 0 {
 		concurrency = int(plan.concurrency / 4)
 	}
-	if int(plan.concurrency/2) > 0 {
-		maxThreadPerCmd = int(plan.concurrency / 2)
-	}
-	wp := NewWorkerPool(concurrency, plan.concurrency, maxThreadPerCmd)
+	wp := NewWorkerPool(concurrency, plan.concurrency)
 
 	// status report
 	ticker := time.NewTicker(60 * time.Second)
