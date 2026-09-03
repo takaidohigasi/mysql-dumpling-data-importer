@@ -164,20 +164,23 @@ func (plan *ImportPlan) Execute() error {
 	go func(plan *ImportPlan, p WorkerPool) {
 		startTime := time.Now()
 		prevCompleted := 0
-		completed := 0
-		eta := time.Now()
+		// no projection is possible until a table finishes, and saying so
+		// beats printing a timestamp that has already passed
+		eta := "unknown"
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
-				elasped := int(time.Since(startTime).Minutes())
-				prevCompleted = completed
+				elapsed := time.Since(startTime)
+				now := time.Now()
 				concurrency, completed := p.Progress()
-				if completed != prevCompleted {
-					eta = startTime.Add(time.Duration(int(elasped*(plan.totalFile-completed)/completed)) * time.Minute)
+				// completed > 0 is what keeps etaFrom from dividing by zero
+				if completed > 0 && completed != prevCompleted {
+					eta = etaFrom(now, elapsed, completed, plan.totalFile).Format("2006/01/02 15:04")
 				}
-				log.Println("current concurrency:", concurrency, ", progress:", completed, "/", plan.totalFile, ", elasped:", time.Since(startTime).String(), ", ETA:", eta.Format("2006/01/02 15:04"))
+				prevCompleted = completed
+				log.Println("current concurrency:", concurrency, ", progress:", completed, "/", plan.totalFile, ", elapsed:", elapsed.Truncate(time.Second), ", ETA:", eta)
 			}
 		}
 	}(plan, wp)
@@ -284,4 +287,12 @@ func maskPassword(args []string) string {
 		masked[i] = arg
 	}
 	return strings.Join(masked, " ")
+}
+
+// etaFrom projects when the import will finish, from the rate implied by what
+// has completed so far. The caller must have checked that completed is not
+// zero.
+func etaFrom(now time.Time, elapsed time.Duration, completed int, total int) time.Time {
+	remaining := time.Duration(float64(elapsed) * float64(total-completed) / float64(completed))
+	return now.Add(remaining)
 }
