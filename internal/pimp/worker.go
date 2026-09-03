@@ -8,9 +8,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// defaultTaskThread is how many threads a task is assumed to want when its
-// file count does not say otherwise.
-const defaultTaskThread = 8
+// mysqlshDefaultThreads is how many threads mysqlsh's util import-table uses
+// when it is not told otherwise, which is what a task reserves from the
+// pool's budget. Nothing here passes --threads, so this is the real thread
+// count of a running import, not a guess.
+const mysqlshDefaultThreads = 8
 
 type Job struct {
 	Task       func(string, *ImportData) error
@@ -27,12 +29,11 @@ type WorkerPool interface {
 }
 
 type workerPool struct {
-	maxWorker          int
-	maxCPU             int
-	maxThreadPerWorker int
-	queuedTaskC        chan Job
-	progress           Progress
-	wg                 sync.WaitGroup
+	maxWorker   int
+	maxCPU      int
+	queuedTaskC chan Job
+	progress    Progress
+	wg          sync.WaitGroup
 }
 
 type Progress struct {
@@ -73,7 +74,7 @@ func (wp *workerPool) run() {
 		wID := i + 1
 		go func(workerID int, wp *workerPool) {
 			for task := range wp.queuedTaskC {
-				taskThread := defaultTaskThread
+				taskThread := mysqlshDefaultThreads
 				// FileNum can be 0 when the file count was given rather than
 				// counted and there is less than one file per table.
 				// Clamping to it would reserve no threads at all, letting
@@ -103,14 +104,13 @@ func (wp *workerPool) Progress() (concurrency int, completed int) {
 	return wp.progress.concurrency, wp.progress.completed
 }
 
-func NewWorkerPool(maxWorker int, maxCPU int, maxThreadPerWorker int) WorkerPool {
+func NewWorkerPool(maxWorker int, maxCPU int) WorkerPool {
 	wp := &workerPool{
-		maxWorker:          maxWorker,
-		maxCPU:             maxCPU,
-		maxThreadPerWorker: maxThreadPerWorker,
-		queuedTaskC:        make(chan Job, 1024),
-		progress:           Progress{},
-		wg:                 sync.WaitGroup{},
+		maxWorker:   maxWorker,
+		maxCPU:      maxCPU,
+		queuedTaskC: make(chan Job, 1024),
+		progress:    Progress{},
+		wg:          sync.WaitGroup{},
 	}
 	return wp
 }
