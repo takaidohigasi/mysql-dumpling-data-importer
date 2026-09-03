@@ -86,13 +86,17 @@ func importRun(cmd *cobra.Command, args []string) error {
 	}
 
 	dbh, err := mysql_defaults_file.OpenUsingDefaultsFile("mysql", dbConfig, "")
-	defer dbh.Close()
 	if err != nil {
 		return err
 	}
+	defer dbh.Close()
 	// check connection in advance
 	_, err = dbh.Exec("select 1")
 	if err != nil {
+		return err
+	}
+
+	if err := pimp.CheckPrerequisites(dbh); err != nil {
 		return err
 	}
 
@@ -112,9 +116,8 @@ func importRun(cmd *cobra.Command, args []string) error {
 		}
 	}()
 
-	if !checkmysqlsh() {
-		log.Infoln("mysqlsh is required")
-		return nil
+	if err := pimp.CheckMysqlsh(); err != nil {
+		return err
 	}
 
 	log.Infoln("working max thread:", concurrency)
@@ -137,11 +140,6 @@ func importRun(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
-}
-
-func checkmysqlsh() bool {
-	_, err := exec.LookPath("mysqlsh")
-	return err == nil
 }
 
 func restoreSchema(ctx context.Context, sqlDir string, dbConfig string) error {
