@@ -8,6 +8,10 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// defaultTaskThread is how many threads a task is assumed to want when its
+// file count does not say otherwise.
+const defaultTaskThread = 8
+
 type Job struct {
 	Task       func(string, *ImportData) error
 	Length     int
@@ -69,8 +73,12 @@ func (wp *workerPool) run() {
 		wID := i + 1
 		go func(workerID int, wp *workerPool) {
 			for task := range wp.queuedTaskC {
-				taskThread := 8
-				if task.Data.FileNum < taskThread {
+				taskThread := defaultTaskThread
+				// FileNum can be 0 when the file count was given rather than
+				// counted and there is less than one file per table.
+				// Clamping to it would reserve no threads at all, letting
+				// every queued task through the check below at once.
+				if task.Data.FileNum > 0 && task.Data.FileNum < taskThread {
 					taskThread = task.Data.FileNum
 				}
 				if wp.maxCPU-wp.progress.concurrency >= taskThread {

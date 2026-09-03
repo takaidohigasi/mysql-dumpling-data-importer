@@ -13,6 +13,18 @@ Flags:
   -h, --help              help for import
       --path string       path for dumpling data (default "/Users/taka-h/git/mysql-dumpling-data-importer")
   -d, --printonly         print mysqlsh commands
+      --total-files int   number of data files, to skip counting them (0 counts them)
+```
+
+`import` counts the dump's data files to report progress and an ETA. On a
+large dump over a network filesystem that walk can take several minutes, and
+it is the only reason those files are visited at all — pass `--total-files`
+to skip it:
+
+```
+% ls <path>/*.csv | wc -l
+5064
+% ./dist/mysql-dumpling-data-importer import --path <path> --total-files 5064
 ```
 
 ## prerequisite
