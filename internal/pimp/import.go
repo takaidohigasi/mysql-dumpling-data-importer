@@ -3,7 +3,7 @@ package pimp
 import (
 	"context"
 	"fmt"
-	"os"
+	"io/fs"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -12,6 +12,17 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	// "github.com/k0kubun/pp/v3"
+)
+
+// countLogEvery is how often the file count reports itself while walking, so
+// a dump large enough to take minutes does not look stalled.
+const countLogEvery = 1000
+
+// Compiled once rather than per file: the walk visits every data file in the
+// dump, and a large dump has thousands of them.
+var (
+	schemaFileRe = regexp.MustCompile(`^(.*?)\.(.*?)-schema\.sql$`)
+	dataFileRe   = regexp.MustCompile(`^(.*?)\.(.*?)\.(.*?)\.csv$`)
 )
 
 type ImportData struct {
@@ -37,33 +48,46 @@ type ImportPlan struct {
 	totalFile   int
 }
 
-func NewImportPlan(ctx context.Context, path string, concurrency int, dbConfig string) Plan {
+// totalFile may be given up front. Counting the data files means visiting
+// every one of them, which on a large dump over a network filesystem takes
+// minutes, and the count is only ever used to report progress.
+func NewImportPlan(ctx context.Context, path string, concurrency int, dbConfig string, totalFile int) Plan {
 	return &ImportPlan{
 		context:     ctx,
 		data:        make(map[string]*ImportData),
 		path:        path,
 		concurrency: concurrency,
 		dbConfig:    dbConfig,
-		totalFile:   0,
+		totalFile:   totalFile,
 	}
 }
 func (plan *ImportPlan) Estimate() error {
-	log.Infoln("estimating import data")
+	log.Infoln("estimating import data in", plan.path)
+	started := time.Now()
+	countFiles := plan.totalFile == 0
+	if !countFiles {
+		log.Infoln("data files will not be counted, using the given total:", plan.totalFile)
+	}
 	totalFiles := 0
-	err := filepath.Walk(plan.path, func(path string, info os.FileInfo, err error) error {
+	// WalkDir, not Walk: the callback needs only the name and whether the
+	// entry is a directory, both of which the directory read already
+	// provides. Walk lstats every entry it visits, which on a dump of
+	// thousands of files is thousands of round trips to no purpose.
+	err := filepath.WalkDir(plan.path, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if info.IsDir() {
+		if entry.IsDir() {
 			return nil
 		}
 
-		if strings.HasSuffix(info.Name(), "-schema.sql") {
-			match := regexp.MustCompile(`^(.*?)\.(.*?)-schema\.sql$`).FindStringSubmatch(info.Name())
+		if strings.HasSuffix(entry.Name(), "-schema.sql") {
+			match := schemaFileRe.FindStringSubmatch(entry.Name())
 			db := match[1]
 			table := match[2]
 			resourceId := db + "." + table
+			log.Infoln("reading schema", resourceId)
 			plan.data[resourceId] = &ImportData{DbName: db, TableName: table}
 			data := plan.data[resourceId]
 			tableDef, err := ExtractTableDef(path)
@@ -78,19 +102,36 @@ func (plan *ImportPlan) Estimate() error {
 			data.ImportCmd = fmt.Sprintf("mysqlsh -- util import-table %s --schema=%s --table=%s --skipRows=1 --columns=%s --dialect=csv --showProgress=false", plan.path+"/"+resourceId+".*.csv", db, table, strings.Join(tableDef.Columns, ","))
 		}
 
-		if strings.HasSuffix(info.Name(), ".csv") {
-			match := regexp.MustCompile(`^(.*?)\.(.*?)\.(.*?)\.csv$`).FindStringSubmatch(info.Name())
+		if countFiles && strings.HasSuffix(entry.Name(), ".csv") {
+			match := dataFileRe.FindStringSubmatch(entry.Name())
 			resourceId := match[1] + "." + match[2]
 			data := plan.data[resourceId]
 			data.FileNum++
 			totalFiles++
+			if totalFiles%countLogEvery == 0 {
+				log.Infoln("counted", totalFiles, "data files")
+			}
 		}
 
 		return nil
 	})
-	log.Infoln("estimating import data: done")
-	log.Infoln("total files: ", totalFiles)
-	plan.totalFile = totalFiles
+	log.Infoln("estimating import data: done in", time.Since(started).Truncate(time.Second))
+	log.Infoln("tables: ", len(plan.data))
+	if countFiles {
+		plan.totalFile = totalFiles
+		log.Infoln("total files: ", plan.totalFile)
+	} else {
+		// The per-table counts were not gathered either, so share the given
+		// total out evenly. It only feeds the progress report, and a task
+		// wants the default thread count either way once its share is above
+		// it.
+		log.Infoln("total files: ", plan.totalFile, "(given, not counted)")
+		if len(plan.data) > 0 {
+			for _, data := range plan.data {
+				data.FileNum = plan.totalFile / len(plan.data)
+			}
+		}
+	}
 	return err
 }
 

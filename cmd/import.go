@@ -36,6 +36,7 @@ func init() {
 		concurrency int
 		dbConfig    string
 		printOnly   bool
+		totalFile   int
 	)
 
 	pwd, err := os.Getwd()
@@ -50,6 +51,7 @@ func init() {
 	importCmd.Flags().IntVarP(&concurrency, "concurrency", "c", defaultConcurrency, "max concurrency to load data")
 	importCmd.Flags().StringVar(&dbConfig, "dbconfig", userHome+"/.my.cnf", "default my.cnf path")
 	importCmd.Flags().BoolVarP(&printOnly, "printonly", "d", false, "print mysqlsh commands")
+	importCmd.Flags().IntVar(&totalFile, "total-files", 0, "number of data files, to skip counting them (0 counts them)")
 
 	log.SetFormatter(&log.TextFormatter{
 		DisableLevelTruncation: true,
@@ -73,6 +75,13 @@ func importRun(cmd *cobra.Command, args []string) error {
 	printOnly, err := cmd.Flags().GetBool("printonly")
 	if err != nil {
 		return err
+	}
+
+	totalFile, err := cmd.Flags().GetInt("total-files")
+	if err != nil {
+		return err
+	} else if totalFile < 0 {
+		return fmt.Errorf("--total-files must not be negative, got %d", totalFile)
 	}
 
 	dbConfig, err := cmd.Flags().GetString("dbconfig")
@@ -122,7 +131,7 @@ func importRun(cmd *cobra.Command, args []string) error {
 
 	log.Infoln("working max thread:", concurrency)
 
-	plan := pimp.NewImportPlan(ctx, path, concurrency, dbConfig)
+	plan := pimp.NewImportPlan(ctx, path, concurrency, dbConfig, totalFile)
 
 	if err := plan.Estimate(); err != nil {
 		return err
