@@ -86,10 +86,10 @@ func importRun(cmd *cobra.Command, args []string) error {
 	}
 
 	dbh, err := mysql_defaults_file.OpenUsingDefaultsFile("mysql", dbConfig, "")
-	defer dbh.Close()
 	if err != nil {
 		return err
 	}
+	defer dbh.Close()
 	// check connection in advance
 	_, err = dbh.Exec("select 1")
 	if err != nil {
