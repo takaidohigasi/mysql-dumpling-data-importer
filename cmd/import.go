@@ -51,7 +51,7 @@ func init() {
 	importCmd.Flags().IntVarP(&concurrency, "concurrency", "c", defaultConcurrency, "max concurrency to load data")
 	importCmd.Flags().StringVar(&dbConfig, "dbconfig", userHome+"/.my.cnf", "default my.cnf path")
 	importCmd.Flags().BoolVarP(&printOnly, "printonly", "d", false, "print mysqlsh commands")
-	importCmd.Flags().IntVar(&totalFile, "total-files", 0, "number of data files, to skip counting them (0 counts them)")
+	importCmd.Flags().IntVar(&totalFile, "total-files", 0, "deprecated and ignored: per-file scheduling gathers the file list, so the files are counted either way")
 
 	log.SetFormatter(&log.TextFormatter{
 		DisableLevelTruncation: true,

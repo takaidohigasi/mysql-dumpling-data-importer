@@ -24,6 +24,9 @@ func TestImportTableArgs(t *testing.T) {
 			"--password=secret",
 			"-- util import-table /dump/mercari.items.*.csv",
 			"--columns=id,name",
+			// one file per run, so a run must not fan out to mysqlsh's
+			// default of 8 threads the pool never handed to it
+			"--threads=1",
 			"--sessionInitSql=SET SESSION sql_log_bin=false;",
 		} {
 			if !strings.Contains(joined, want) {

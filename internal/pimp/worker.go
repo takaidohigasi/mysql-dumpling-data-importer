@@ -8,12 +8,6 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-// mysqlshDefaultThreads is how many threads mysqlsh's util import-table uses
-// when it is not told otherwise, which is what a task reserves from the
-// pool's budget. Nothing here passes --threads, so this is the real thread
-// count of a running import, not a guess.
-const mysqlshDefaultThreads = 8
-
 type Job struct {
 	Task       func(string, *ImportData) error
 	ResourceId string
@@ -25,7 +19,6 @@ type WorkerPool interface {
 	AddTask(Job)
 	Wait()
 	Progress() (int, int)
-	Advance(int)
 }
 
 type workerPool struct {
@@ -48,19 +41,10 @@ func (p *Progress) start(thread int) {
 	p.concurrency += thread
 }
 
-func (p *Progress) finish(thread int) {
+func (p *Progress) finish(thread int, file int) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	p.concurrency -= thread
-}
-
-// advance records files completed inside a still-running task. completed used
-// to be bumped only in finish, when a whole table was done, which left the
-// report sitting at 0 for the entire load of a big table; the per-file status
-// lines streamed out of mysqlsh now feed this as they go by.
-func (p *Progress) advance(file int) {
-	p.mutex.Lock()
-	defer p.mutex.Unlock()
 	p.completed += file
 }
 
@@ -83,23 +67,20 @@ func (wp *workerPool) run() {
 		wID := i + 1
 		go func(workerID int, wp *workerPool) {
 			for task := range wp.queuedTaskC {
-				taskThread := mysqlshDefaultThreads
-				// FileNum can be 0 when the file count was given rather than
-				// counted and there is less than one file per table.
-				// Clamping to it would reserve no threads at all, letting
-				// every queued task through the check below at once.
-				if task.Data.FileNum > 0 && task.Data.FileNum < taskThread {
-					taskThread = task.Data.FileNum
-				}
+				// one data file per task, imported with --threads=1, so every
+				// task costs exactly one thread of the budget
+				const taskThread = 1
 				if wp.maxCPU-wp.progress.concurrency >= taskThread {
 					wp.progress.start(taskThread)
 					if err := task.Task(task.ResourceId, task.Data); err != nil {
 						log.Errorln("error", err)
 					}
-					wp.progress.finish(taskThread)
+					wp.progress.finish(taskThread, 1)
 					wp.wg.Done()
 				} else {
-					// re-enqueue
+					// re-enqueue; with as many workers as budgeted threads and
+					// every task costing one, this is only reachable if those
+					// two ever diverge again
 					wp.queuedTaskC <- task
 					time.Sleep(time.Duration(rand.Intn(60)) * time.Second)
 					log.Infoln("re-enqueued:", task.ResourceId, "required thread: ", taskThread, "available thread: ", wp.maxCPU-wp.progress.concurrency)
@@ -111,10 +92,6 @@ func (wp *workerPool) run() {
 
 func (wp *workerPool) Progress() (concurrency int, completed int) {
 	return wp.progress.concurrency, wp.progress.completed
-}
-
-func (wp *workerPool) Advance(file int) {
-	wp.progress.advance(file)
 }
 
 func NewWorkerPool(maxWorker int, maxCPU int) WorkerPool {
