@@ -31,15 +31,17 @@ var (
 )
 
 // workerRecordsRe matches the status line a mysqlsh import worker prints as it
-// finishes loading a file (or a chunk of one):
+// finishes loading a file (or a chunk of one). 8.0.45 separates the worker tag
+// from the file name with a bare space and prints the base name:
 //
-//	[Worker001]: /dump/db.table.000.csv: Records: 100  Deleted: 0  Skipped: 1  Warnings: 0
+//	[Worker002] mercari.coupons.0000000010000.csv: Records: 3381  Deleted: 0  Skipped: 0  Warnings: 0
 //
-// util import-table prints these by default: its verbose option defaults to
-// on, and only util load-dump turns it off. A file split into chunks or
-// sub-chunks appears once per chunk, so a count of files must deduplicate on
-// the captured name.
-var workerRecordsRe = regexp.MustCompile(`^\[Worker\d+\]:\s+(.+?): Records:\s+\d+`)
+// while current mysql-shell source formats the tag as "[Worker%03d]: ", hence
+// the optional colon. util import-table prints these by default: its verbose
+// option defaults to on, and only util load-dump turns it off. A file split
+// into chunks or sub-chunks appears once per chunk, so a count of files must
+// deduplicate on the captured name.
+var workerRecordsRe = regexp.MustCompile(`^\[Worker\d+\]:?\s+(.+?): Records:\s+\d+`)
 
 // lineScanWriter keeps the whole output for the caller — the error path logs
 // it, as CombinedOutput used to provide — while feeding each complete line to

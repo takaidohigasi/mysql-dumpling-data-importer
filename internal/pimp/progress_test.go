@@ -53,10 +53,13 @@ func TestLineScanWriterCountsDistinctFiles(t *testing.T) {
 	}}
 
 	// one file per line, a chunked file repeating, a sub-chunk suffix, noise
-	// lines, and a line split across two writes
+	// lines, and a line split across two writes; the first Worker line is
+	// verbatim from mysqlsh 8.0.45 (no colon after the tag, base name only),
+	// the others use the "[Worker%03d]: " tag of current mysql-shell source
 	lines := "" +
-		"Importing from 3 files to table `mercari`.`items` in MySQL Server at 10.64.12.15:3306 using 8 threads\n" +
-		"[Worker001]: /dump/mercari.items.000.csv: Records: 100  Deleted: 0  Skipped: 1  Warnings: 0\n" +
+		"Importing from multiple files to table `mercari`.`items` in MySQL Server at 10.64.12.15:3306 using 8 threads\n" +
+		"Parallel load data...\n" +
+		"[Worker002] mercari.coupons.0000000010000.csv: Records: 3381  Deleted: 0  Skipped: 0  Warnings: 0\n" +
 		"[Worker002]: /dump/mercari.items.001.csv: Records: 50  Deleted: 0  Skipped: 1  Warnings: 0 - flushed sub-chunk 1\n" +
 		"[Worker002]: /dump/mercari.items.001.csv: Records: 50  Deleted: 0  Skipped: 0  Warnings: 0 - loading finished in 2 sub-chunks\n"
 	half := len(lines) / 2
