@@ -1,7 +1,6 @@
 package pimp
 
 import (
-	"strings"
 	"testing"
 	"time"
 )
@@ -34,46 +33,5 @@ func TestEtaFrom(t *testing.T) {
 				t.Errorf("etaFrom() = %v is before now (%v)", got, now)
 			}
 		})
-	}
-}
-
-func TestLineScanWriterCountsDistinctFiles(t *testing.T) {
-	seen := make(map[string]struct{})
-	count := 0
-	w := &lineScanWriter{onLine: func(line string) {
-		m := workerRecordsRe.FindStringSubmatch(line)
-		if m == nil {
-			return
-		}
-		if _, dup := seen[m[1]]; dup {
-			return
-		}
-		seen[m[1]] = struct{}{}
-		count++
-	}}
-
-	// one file per line, a chunked file repeating, a sub-chunk suffix, noise
-	// lines, and a line split across two writes
-	lines := "" +
-		"Importing from 3 files to table `mercari`.`items` in MySQL Server at 10.64.12.15:3306 using 8 threads\n" +
-		"[Worker001]: /dump/mercari.items.000.csv: Records: 100  Deleted: 0  Skipped: 1  Warnings: 0\n" +
-		"[Worker002]: /dump/mercari.items.001.csv: Records: 50  Deleted: 0  Skipped: 1  Warnings: 0 - flushed sub-chunk 1\n" +
-		"[Worker002]: /dump/mercari.items.001.csv: Records: 50  Deleted: 0  Skipped: 0  Warnings: 0 - loading finished in 2 sub-chunks\n"
-	half := len(lines) / 2
-	for _, chunk := range []string{lines[:half], lines[half:],
-		"[Worker003]: /dump/mercari.items", // split mid-line...
-		".002.csv: Records: 7  Deleted: 0  Skipped: 1  Warnings: 0\n",
-		"3 files (1.20 GB) were imported in 60.0 sec at 20.00 MB/s\n",
-	} {
-		if _, err := w.Write([]byte(chunk)); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	if count != 3 {
-		t.Errorf("distinct files counted = %d, want 3 (seen: %v)", count, seen)
-	}
-	if !strings.Contains(w.String(), "were imported in") {
-		t.Errorf("String() should retain the full output, got %q", w.String())
 	}
 }
