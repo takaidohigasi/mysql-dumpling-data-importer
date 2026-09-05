@@ -16,7 +16,6 @@ const mysqlshDefaultThreads = 8
 
 type Job struct {
 	Task       func(string, *ImportData) error
-	Length     int
 	ResourceId string
 	Data       *ImportData
 }
@@ -26,6 +25,7 @@ type WorkerPool interface {
 	AddTask(Job)
 	Wait()
 	Progress() (int, int)
+	Advance(int)
 }
 
 type workerPool struct {
@@ -48,10 +48,19 @@ func (p *Progress) start(thread int) {
 	p.concurrency += thread
 }
 
-func (p *Progress) finish(thread int, file int) {
+func (p *Progress) finish(thread int) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	p.concurrency -= thread
+}
+
+// advance records files completed inside a still-running task. completed used
+// to be bumped only in finish, when a whole table was done, which left the
+// report sitting at 0 for the entire load of a big table; the per-file status
+// lines streamed out of mysqlsh now feed this as they go by.
+func (p *Progress) advance(file int) {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
 	p.completed += file
 }
 
@@ -87,7 +96,7 @@ func (wp *workerPool) run() {
 					if err := task.Task(task.ResourceId, task.Data); err != nil {
 						log.Errorln("error", err)
 					}
-					wp.progress.finish(taskThread, task.Length)
+					wp.progress.finish(taskThread)
 					wp.wg.Done()
 				} else {
 					// re-enqueue
@@ -102,6 +111,10 @@ func (wp *workerPool) run() {
 
 func (wp *workerPool) Progress() (concurrency int, completed int) {
 	return wp.progress.concurrency, wp.progress.completed
+}
+
+func (wp *workerPool) Advance(file int) {
+	wp.progress.advance(file)
 }
 
 func NewWorkerPool(maxWorker int, maxCPU int) WorkerPool {

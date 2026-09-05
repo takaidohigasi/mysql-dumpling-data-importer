@@ -1,6 +1,7 @@
 package pimp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io/fs"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -27,6 +29,49 @@ var (
 	schemaFileRe = regexp.MustCompile(`^(.*?)\.(.*?)-schema\.sql$`)
 	dataFileRe   = regexp.MustCompile(`^(.*?)\.(.*?)\.(.*?)\.csv$`)
 )
+
+// workerRecordsRe matches the status line a mysqlsh import worker prints as it
+// finishes loading a file (or a chunk of one):
+//
+//	[Worker001]: /dump/db.table.000.csv: Records: 100  Deleted: 0  Skipped: 1  Warnings: 0
+//
+// util import-table prints these by default: its verbose option defaults to
+// on, and only util load-dump turns it off. A file split into chunks or
+// sub-chunks appears once per chunk, so a count of files must deduplicate on
+// the captured name.
+var workerRecordsRe = regexp.MustCompile(`^\[Worker\d+\]:\s+(.+?): Records:\s+\d+`)
+
+// lineScanWriter keeps the whole output for the caller — the error path logs
+// it, as CombinedOutput used to provide — while feeding each complete line to
+// onLine as it streams in, which is what lets progress move mid-import.
+type lineScanWriter struct {
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	partial []byte
+	onLine  func(string)
+}
+
+func (w *lineScanWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf.Write(p)
+	w.partial = append(w.partial, p...)
+	for {
+		i := bytes.IndexByte(w.partial, '\n')
+		if i < 0 {
+			break
+		}
+		w.onLine(string(w.partial[:i]))
+		w.partial = w.partial[i+1:]
+	}
+	return len(p), nil
+}
+
+func (w *lineScanWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
 
 type ImportData struct {
 	DbName    string
@@ -194,16 +239,41 @@ func (plan *ImportPlan) Execute() error {
 				return err
 			}
 			log.Infoln(data.ImportCmd)
-			result, err = exec.CommandContext(plan.context, data.ImportArgs[0], data.ImportArgs[1:]...).CombinedOutput()
-			if err != nil {
-				log.Errorln(string(result))
+			// Stream the import's output instead of collecting it: every data
+			// file surfaces in a [WorkerNNN] status line as it loads, and
+			// counting those is what moves the progress report while a big
+			// table is still going. Counted on first sight of each file name,
+			// since a chunked file prints one line per chunk.
+			seen := make(map[string]struct{})
+			out := &lineScanWriter{onLine: func(line string) {
+				m := workerRecordsRe.FindStringSubmatch(line)
+				if m == nil {
+					return
+				}
+				if _, dup := seen[m[1]]; dup {
+					return
+				}
+				seen[m[1]] = struct{}{}
+				wp.Advance(1)
+			}}
+			cmd := exec.CommandContext(plan.context, data.ImportArgs[0], data.ImportArgs[1:]...)
+			// the same writer on both streams: exec then merges them onto one
+			// pipe, so lines cannot interleave mid-line
+			cmd.Stdout = out
+			cmd.Stderr = out
+			if err := cmd.Run(); err != nil {
+				log.Errorln(out.String())
 				return err
 			}
+			// True the count up to what the walk (or the even split of a given
+			// total) said this table holds, so the sum still lands exactly on
+			// totalFile even when the output parsing saw a different number.
+			wp.Advance(data.FileNum - len(seen))
 			log.Infoln("load", resourceId, ": done")
-			log.Infoln(string(result))
+			log.Infoln(out.String())
 			return nil
 		}
-		wp.AddTask(Job{Task: task, Length: v.FileNum, ResourceId: k, Data: v})
+		wp.AddTask(Job{Task: task, ResourceId: k, Data: v})
 	}
 
 	wp.Wait()
