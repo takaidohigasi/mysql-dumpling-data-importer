@@ -1,7 +1,6 @@
 package pimp
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io/fs"
@@ -11,7 +10,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	log "github.com/sirupsen/logrus"
@@ -30,58 +28,20 @@ var (
 	dataFileRe   = regexp.MustCompile(`^(.*?)\.(.*?)\.(.*?)\.csv$`)
 )
 
-// workerRecordsRe matches the status line a mysqlsh import worker prints as it
-// finishes loading a file (or a chunk of one):
-//
-//	[Worker001]: /dump/db.table.000.csv: Records: 100  Deleted: 0  Skipped: 1  Warnings: 0
-//
-// util import-table prints these by default: its verbose option defaults to
-// on, and only util load-dump turns it off. A file split into chunks or
-// sub-chunks appears once per chunk, so a count of files must deduplicate on
-// the captured name.
-var workerRecordsRe = regexp.MustCompile(`^\[Worker\d+\]:\s+(.+?): Records:\s+\d+`)
-
-// lineScanWriter keeps the whole output for the caller — the error path logs
-// it, as CombinedOutput used to provide — while feeding each complete line to
-// onLine as it streams in, which is what lets progress move mid-import.
-type lineScanWriter struct {
-	mu      sync.Mutex
-	buf     bytes.Buffer
-	partial []byte
-	onLine  func(string)
-}
-
-func (w *lineScanWriter) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.buf.Write(p)
-	w.partial = append(w.partial, p...)
-	for {
-		i := bytes.IndexByte(w.partial, '\n')
-		if i < 0 {
-			break
-		}
-		w.onLine(string(w.partial[:i]))
-		w.partial = w.partial[i+1:]
-	}
-	return len(p), nil
-}
-
-func (w *lineScanWriter) String() string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.buf.String()
-}
-
 type ImportData struct {
 	DbName    string
 	TableName string
-	FileNum   int
-	// ImportArgs is what actually runs. ImportCmd is the same thing rendered
-	// for display, with the password blanked so it stays out of the log.
-	ImportArgs []string
-	ImportCmd  string
-	AlterStmt  string
+	Columns   []string
+	// Files is every data file of the table, in walk order. Each file is
+	// imported by its own mysqlsh run, so a finished file both advances the
+	// progress report and frees its thread for whatever is queued next — with
+	// one import-table per table, a big table kept its whole reservation
+	// until its last file was done and progress sat still the entire time.
+	Files []string
+	// ImportCmd is the table's import rendered for display, with the glob and
+	// a blanked password; the actual runs substitute one concrete file each.
+	ImportCmd string
+	AlterStmt string
 }
 
 type Plan interface {
@@ -99,9 +59,9 @@ type ImportPlan struct {
 	totalFile   int
 }
 
-// totalFile may be given up front. Counting the data files means visiting
-// every one of them, which on a large dump over a network filesystem takes
-// minutes, and the count is only ever used to report progress.
+// totalFile used to be given up front to skip counting the data files.
+// Scheduling is per file now, so the walk has to gather the file list either
+// way and a given total is ignored.
 func NewImportPlan(ctx context.Context, path string, concurrency int, dbConfig string, totalFile int) Plan {
 	return &ImportPlan{
 		context:     ctx,
@@ -115,9 +75,8 @@ func NewImportPlan(ctx context.Context, path string, concurrency int, dbConfig s
 func (plan *ImportPlan) Estimate() error {
 	log.Infoln("estimating import data in", plan.path)
 	started := time.Now()
-	countFiles := plan.totalFile == 0
-	if !countFiles {
-		log.Infoln("data files will not be counted, using the given total:", plan.totalFile)
+	if plan.totalFile != 0 {
+		log.Infoln("--total-files is ignored: per-file scheduling needs the file list, so the files are gathered and counted either way")
 	}
 	// The same defaults file the rest of the run uses, so mysqlsh connects
 	// where the schema load and the precheck did.
@@ -152,16 +111,26 @@ func (plan *ImportPlan) Estimate() error {
 			if tableDef.AutoIncrement != 0 {
 				data.AlterStmt = fmt.Sprintf("ALTER TABLE %s FORCE AUTO_INCREMENT=%d;", resourceId, tableDef.AutoIncrement)
 			}
+			data.Columns = tableDef.Columns
 			// @see https://dev.mysql.com/doc/mysql-shell/8.0/en/mysql-shell-utilities-parallel-table.html
-			data.ImportArgs = importTableArgs(dbConfig, plan.path+"/"+resourceId+".*.csv", db, table, tableDef.Columns)
-			data.ImportCmd = maskPassword(data.ImportArgs)
+			data.ImportCmd = maskPassword(importTableArgs(dbConfig, plan.path+"/"+resourceId+".*.csv", db, table, tableDef.Columns))
 		}
 
-		if countFiles && strings.HasSuffix(entry.Name(), ".csv") {
+		if strings.HasSuffix(entry.Name(), ".csv") {
 			match := dataFileRe.FindStringSubmatch(entry.Name())
+			if match == nil {
+				log.Warnln("skipping csv not named like db.table.chunk.csv:", path)
+				return nil
+			}
 			resourceId := match[1] + "." + match[2]
 			data := plan.data[resourceId]
-			data.FileNum++
+			if data == nil {
+				// dumpling writes the schema file before the data files and
+				// "-" sorts before ".", so on a walk of its output this means
+				// the schema file is genuinely missing, not merely later
+				return fmt.Errorf("data file %s has no %s-schema.sql", path, resourceId)
+			}
+			data.Files = append(data.Files, path)
 			totalFiles++
 			if totalFiles%countLogEvery == 0 {
 				log.Infoln("counted", totalFiles, "data files")
@@ -172,31 +141,30 @@ func (plan *ImportPlan) Estimate() error {
 	})
 	log.Infoln("estimating import data: done in", time.Since(started).Truncate(time.Second))
 	log.Infoln("tables: ", len(plan.data))
-	if countFiles {
-		plan.totalFile = totalFiles
-		log.Infoln("total files: ", plan.totalFile)
-	} else {
-		// The per-table counts were not gathered either, so share the given
-		// total out evenly. It only feeds the progress report, and a task
-		// wants the default thread count either way once its share is above
-		// it.
-		log.Infoln("total files: ", plan.totalFile, "(given, not counted)")
-		if len(plan.data) > 0 {
-			for _, data := range plan.data {
-				data.FileNum = plan.totalFile / len(plan.data)
-			}
-		}
-	}
+	plan.totalFile = totalFiles
+	log.Infoln("total files: ", plan.totalFile)
 	return err
 }
 
 func (plan *ImportPlan) Execute() error {
 	log.Infoln("importing data")
-	concurrency := 1
-	if int(plan.concurrency/4) > 0 {
-		concurrency = int(plan.concurrency / 4)
+
+	// Schemas are created up front, serially: a table's files no longer share
+	// a task with their schema load, and any of them may be scheduled first.
+	for k, v := range plan.data {
+		path := plan.path + "/" + k + "-schema.sql"
+		log.Infoln("create table", k, "from", path)
+		result, err := exec.CommandContext(plan.context, "mysql", fmt.Sprintf("--defaults-extra-file=%s", plan.dbConfig), v.DbName, "-e", fmt.Sprintf("source %s", path)).CombinedOutput()
+		if err != nil {
+			log.Errorln(string(result))
+			return err
+		}
 	}
-	wp := NewWorkerPool(concurrency, plan.concurrency)
+
+	// Every task costs one thread (its import runs with --threads=1), so the
+	// pool needs as many workers as it has threads to hand out; fewer workers
+	// would cap the number of files in flight below the budget.
+	wp := NewWorkerPool(plan.concurrency, plan.concurrency)
 
 	// status report
 	ticker := time.NewTicker(60 * time.Second)
@@ -205,7 +173,7 @@ func (plan *ImportPlan) Execute() error {
 	go func(plan *ImportPlan, p WorkerPool) {
 		startTime := time.Now()
 		prevCompleted := 0
-		// no projection is possible until a table finishes, and saying so
+		// no projection is possible until a file finishes, and saying so
 		// beats printing a timestamp that has already passed
 		eta := "unknown"
 		for {
@@ -227,53 +195,24 @@ func (plan *ImportPlan) Execute() error {
 	}(plan, wp)
 
 	wp.Run()
+	dbConfig := mysql_defaults_file.NewConfig(plan.dbConfig)
 	for k, v := range plan.data {
-		task := func(resourceId string, data *ImportData) error {
-			log.Infoln("load", resourceId)
-			path := plan.path + "/" + resourceId + "-schema.sql"
-			db := strings.Split(resourceId, ".")[0]
-			log.Infoln(path)
-			result, err := exec.CommandContext(plan.context, "mysql", fmt.Sprintf("--defaults-extra-file=%s", plan.dbConfig), db, "-e", fmt.Sprintf("source %s", path)).CombinedOutput()
-			if err != nil {
-				log.Errorln(string(result))
-				return err
-			}
-			log.Infoln(data.ImportCmd)
-			// Stream the import's output instead of collecting it: every data
-			// file surfaces in a [WorkerNNN] status line as it loads, and
-			// counting those is what moves the progress report while a big
-			// table is still going. Counted on first sight of each file name,
-			// since a chunked file prints one line per chunk.
-			seen := make(map[string]struct{})
-			out := &lineScanWriter{onLine: func(line string) {
-				m := workerRecordsRe.FindStringSubmatch(line)
-				if m == nil {
-					return
+		log.Infoln(v.ImportCmd)
+		for _, file := range v.Files {
+			// built per iteration so each closure keeps its own file
+			args := importTableArgs(dbConfig, file, v.DbName, v.TableName, v.Columns)
+			name := k + " " + filepath.Base(file)
+			task := func(resourceId string, data *ImportData) error {
+				result, err := exec.CommandContext(plan.context, args[0], args[1:]...).CombinedOutput()
+				if err != nil {
+					log.Errorln(string(result))
+					return err
 				}
-				if _, dup := seen[m[1]]; dup {
-					return
-				}
-				seen[m[1]] = struct{}{}
-				wp.Advance(1)
-			}}
-			cmd := exec.CommandContext(plan.context, data.ImportArgs[0], data.ImportArgs[1:]...)
-			// the same writer on both streams: exec then merges them onto one
-			// pipe, so lines cannot interleave mid-line
-			cmd.Stdout = out
-			cmd.Stderr = out
-			if err := cmd.Run(); err != nil {
-				log.Errorln(out.String())
-				return err
+				log.Infoln("load", resourceId, ": done")
+				return nil
 			}
-			// True the count up to what the walk (or the even split of a given
-			// total) said this table holds, so the sum still lands exactly on
-			// totalFile even when the output parsing saw a different number.
-			wp.Advance(data.FileNum - len(seen))
-			log.Infoln("load", resourceId, ": done")
-			log.Infoln(out.String())
-			return nil
+			wp.AddTask(Job{Task: task, ResourceId: name, Data: v})
 		}
-		wp.AddTask(Job{Task: task, ResourceId: k, Data: v})
 	}
 
 	wp.Wait()
@@ -294,7 +233,8 @@ func (plan *ImportPlan) PrintCmd() {
 // defaultMySQLPort is used when the defaults file names a host but no port.
 const defaultMySQLPort = 3306
 
-// importTableArgs renders the argv for one table's parallel import.
+// importTableArgs renders the argv importing source — one data file, or the
+// table's glob when rendered for display — into db.table.
 //
 // --mysql is what matters here: util import-table needs a classic protocol
 // session, and without it mysqlsh connects over X Protocol and refuses with
@@ -302,7 +242,7 @@ const defaultMySQLPort = 3306
 //
 // The connection comes from the defaults file rather than being left to
 // mysqlsh's own defaults, so it lands on the same server as the schema load.
-func importTableArgs(config mysql_defaults_file.Config, glob string, db string, table string, columns []string) []string {
+func importTableArgs(config mysql_defaults_file.Config, source string, db string, table string, columns []string) []string {
 	args := []string{"mysqlsh", "--mysql"}
 
 	// socket takes precedence over host, matching BuildDSN
@@ -329,13 +269,17 @@ func importTableArgs(config mysql_defaults_file.Config, glob string, db string, 
 	args = append(args, "--user="+user, "--password="+config.Password)
 
 	return append(args,
-		"--", "util", "import-table", glob,
+		"--", "util", "import-table", source,
 		"--schema="+db,
 		"--table="+table,
 		"--skipRows=1",
 		"--columns="+strings.Join(columns, ","),
 		"--dialect=csv",
 		"--showProgress=false",
+		// one file per run: parallelism comes from running many of these at
+		// once, and left at its default of 8 threads a single run would use
+		// capacity the pool never handed to it
+		"--threads=1",
 		// sql_log_bin off so the import is not written to the binlog. Set
 		// here rather than appended by the caller: exec runs mysqlsh without
 		// a shell, so the value must not carry its own quotes.
