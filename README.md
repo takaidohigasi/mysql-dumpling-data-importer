@@ -13,6 +13,8 @@ Flags:
   -h, --help              help for import
       --path string       path for dumpling data (default "/Users/taka-h/git/mysql-dumpling-data-importer")
   -d, --printonly         print mysqlsh commands
+      --skip-db-create    skip sourcing the *-schema-create.sql files; use when the target databases already exist
+      --tables string     comma-separated db.table list to import; only their schemas and data files are touched (default: every table in the dump)
       --total-files int   deprecated and ignored: per-file scheduling gathers the file list, so the files are counted either way
 ```
 
@@ -24,6 +26,17 @@ file immediately frees its thread for the next queued file, and the progress
 report and ETA advance file by file. `--total-files` is deprecated and
 ignored: the file list is needed for scheduling, so the files are counted
 while gathering it.
+
+To re-import a subset — say one table was truncated on the target — restrict
+the run and keep the existing databases:
+
+```
+% ./dist/mysql-dumpling-data-importer import --path <path> \
+    --tables 'mercari.items' --skip-db-create
+```
+
+`--tables` entries that the dump does not contain fail the run up front, so a
+typo cannot silently import less than asked.
 
 ## prerequisite
 
