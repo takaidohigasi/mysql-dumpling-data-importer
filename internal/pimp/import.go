@@ -219,10 +219,9 @@ func (plan *ImportPlan) Execute() error {
 		}
 	}
 
-	// Every task costs one thread (its import runs with --threads=1), so the
-	// pool needs as many workers as it has threads to hand out; fewer workers
-	// would cap the number of files in flight below the budget.
-	wp := NewWorkerPool(plan.concurrency, plan.concurrency)
+	// One file per task, each imported with --threads=1, so --concurrency
+	// workers are exactly --concurrency mysqlsh threads in flight.
+	wp := NewWorkerPool(plan.concurrency)
 
 	// status report
 	ticker := time.NewTicker(60 * time.Second)

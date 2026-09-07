@@ -1,9 +1,7 @@
 package pimp
 
 import (
-	"math/rand"
 	"sync"
-	"time"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -21,31 +19,33 @@ type WorkerPool interface {
 	Progress() (int, int)
 }
 
+// workerPool runs one data file per task, each imported with --threads=1, so
+// the worker count IS the thread count: there is no separate thread budget to
+// reserve against, and a worker simply runs whatever it pulls next.
 type workerPool struct {
 	maxWorker   int
-	maxCPU      int
 	queuedTaskC chan Job
 	progress    Progress
 	wg          sync.WaitGroup
 }
 
 type Progress struct {
-	mutex       sync.Mutex
-	concurrency int
-	completed   int
+	mutex     sync.Mutex
+	running   int
+	completed int
 }
 
-func (p *Progress) start(thread int) {
+func (p *Progress) start() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	p.concurrency += thread
+	p.running++
 }
 
-func (p *Progress) finish(thread int, file int) {
+func (p *Progress) finish() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
-	p.concurrency -= thread
-	p.completed += file
+	p.running--
+	p.completed++
 }
 
 func (wp *workerPool) Run() {
@@ -62,42 +62,29 @@ func (wp *workerPool) Wait() {
 }
 
 func (wp *workerPool) run() {
-	wp.progress.concurrency = 0
 	for i := 0; i < wp.maxWorker; i++ {
-		wID := i + 1
-		go func(workerID int, wp *workerPool) {
+		go func(wp *workerPool) {
 			for task := range wp.queuedTaskC {
-				// one data file per task, imported with --threads=1, so every
-				// task costs exactly one thread of the budget
-				const taskThread = 1
-				if wp.maxCPU-wp.progress.concurrency >= taskThread {
-					wp.progress.start(taskThread)
-					if err := task.Task(task.ResourceId, task.Data); err != nil {
-						log.Errorln("error", err)
-					}
-					wp.progress.finish(taskThread, 1)
-					wp.wg.Done()
-				} else {
-					// re-enqueue; with as many workers as budgeted threads and
-					// every task costing one, this is only reachable if those
-					// two ever diverge again
-					wp.queuedTaskC <- task
-					time.Sleep(time.Duration(rand.Intn(60)) * time.Second)
-					log.Infoln("re-enqueued:", task.ResourceId, "required thread: ", taskThread, "available thread: ", wp.maxCPU-wp.progress.concurrency)
+				wp.progress.start()
+				if err := task.Task(task.ResourceId, task.Data); err != nil {
+					log.Errorln("error", err)
 				}
+				wp.progress.finish()
+				wp.wg.Done()
 			}
-		}(wID, wp)
+		}(wp)
 	}
 }
 
-func (wp *workerPool) Progress() (concurrency int, completed int) {
-	return wp.progress.concurrency, wp.progress.completed
+func (wp *workerPool) Progress() (running int, completed int) {
+	wp.progress.mutex.Lock()
+	defer wp.progress.mutex.Unlock()
+	return wp.progress.running, wp.progress.completed
 }
 
-func NewWorkerPool(maxWorker int, maxCPU int) WorkerPool {
+func NewWorkerPool(maxWorker int) WorkerPool {
 	wp := &workerPool{
 		maxWorker:   maxWorker,
-		maxCPU:      maxCPU,
 		queuedTaskC: make(chan Job, 1024),
 		progress:    Progress{},
 		wg:          sync.WaitGroup{},
