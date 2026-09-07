@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -57,12 +58,48 @@ type ImportPlan struct {
 	dbConfig    string
 	context     context.Context
 	totalFile   int
+	// tables restricts the plan to these db.table names; nil means every
+	// table in the dump. Built with ParseTableFilter.
+	tables map[string]struct{}
+}
+
+// ParseTableFilter turns --tables ("db.table,db.table2") into the set Estimate
+// filters on. An empty input means no filter and returns nil.
+func ParseTableFilter(s string) (map[string]struct{}, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	tables := make(map[string]struct{})
+	for _, item := range strings.Split(s, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		db, table, ok := strings.Cut(item, ".")
+		if !ok || db == "" || table == "" {
+			return nil, fmt.Errorf("--tables entries must be db.table, got %q", item)
+		}
+		tables[item] = struct{}{}
+	}
+	if len(tables) == 0 {
+		return nil, fmt.Errorf("--tables was given but holds no db.table entries: %q", s)
+	}
+	return tables, nil
+}
+
+// wants reports whether the plan covers resourceId (db.table).
+func (plan *ImportPlan) wants(resourceId string) bool {
+	if plan.tables == nil {
+		return true
+	}
+	_, ok := plan.tables[resourceId]
+	return ok
 }
 
 // totalFile used to be given up front to skip counting the data files.
 // Scheduling is per file now, so the walk has to gather the file list either
 // way and a given total is ignored.
-func NewImportPlan(ctx context.Context, path string, concurrency int, dbConfig string, totalFile int) Plan {
+func NewImportPlan(ctx context.Context, path string, concurrency int, dbConfig string, totalFile int, tables map[string]struct{}) Plan {
 	return &ImportPlan{
 		context:     ctx,
 		data:        make(map[string]*ImportData),
@@ -70,6 +107,7 @@ func NewImportPlan(ctx context.Context, path string, concurrency int, dbConfig s
 		concurrency: concurrency,
 		dbConfig:    dbConfig,
 		totalFile:   totalFile,
+		tables:      tables,
 	}
 }
 func (plan *ImportPlan) Estimate() error {
@@ -100,6 +138,9 @@ func (plan *ImportPlan) Estimate() error {
 			db := match[1]
 			table := match[2]
 			resourceId := db + "." + table
+			if !plan.wants(resourceId) {
+				return nil
+			}
 			log.Infoln("reading schema", resourceId)
 			plan.data[resourceId] = &ImportData{DbName: db, TableName: table}
 			data := plan.data[resourceId]
@@ -123,6 +164,9 @@ func (plan *ImportPlan) Estimate() error {
 				return nil
 			}
 			resourceId := match[1] + "." + match[2]
+			if !plan.wants(resourceId) {
+				return nil
+			}
 			data := plan.data[resourceId]
 			if data == nil {
 				// dumpling writes the schema file before the data files and
@@ -143,6 +187,20 @@ func (plan *ImportPlan) Estimate() error {
 	log.Infoln("tables: ", len(plan.data))
 	plan.totalFile = totalFiles
 	log.Infoln("total files: ", plan.totalFile)
+	if err == nil && plan.tables != nil {
+		// A filter entry the walk never saw is a typo or the wrong dump;
+		// surface it here rather than silently importing less than asked.
+		var missing []string
+		for t := range plan.tables {
+			if plan.data[t] == nil {
+				missing = append(missing, t)
+			}
+		}
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			return fmt.Errorf("--tables entries not found in the dump (no <db>.<table>-schema.sql): %s", strings.Join(missing, ", "))
+		}
+	}
 	return err
 }
 

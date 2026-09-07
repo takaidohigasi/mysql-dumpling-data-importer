@@ -32,11 +32,13 @@ func init() {
 	rootCmd.AddCommand(importCmd)
 
 	var (
-		path        string
-		concurrency int
-		dbConfig    string
-		printOnly   bool
-		totalFile   int
+		path         string
+		concurrency  int
+		dbConfig     string
+		printOnly    bool
+		totalFile    int
+		skipDBCreate bool
+		tables       string
 	)
 
 	pwd, err := os.Getwd()
@@ -52,6 +54,8 @@ func init() {
 	importCmd.Flags().StringVar(&dbConfig, "dbconfig", userHome+"/.my.cnf", "default my.cnf path")
 	importCmd.Flags().BoolVarP(&printOnly, "printonly", "d", false, "print mysqlsh commands")
 	importCmd.Flags().IntVar(&totalFile, "total-files", 0, "deprecated and ignored: per-file scheduling gathers the file list, so the files are counted either way")
+	importCmd.Flags().BoolVar(&skipDBCreate, "skip-db-create", false, "skip sourcing the *-schema-create.sql files; use when the target databases already exist")
+	importCmd.Flags().StringVar(&tables, "tables", "", "comma-separated db.table list to import; only their schemas and data files are touched (default: every table in the dump)")
 
 	log.SetFormatter(&log.TextFormatter{
 		DisableLevelTruncation: true,
@@ -82,6 +86,20 @@ func importRun(cmd *cobra.Command, args []string) error {
 		return err
 	} else if totalFile < 0 {
 		return fmt.Errorf("--total-files must not be negative, got %d", totalFile)
+	}
+
+	skipDBCreate, err := cmd.Flags().GetBool("skip-db-create")
+	if err != nil {
+		return err
+	}
+
+	tablesFlag, err := cmd.Flags().GetString("tables")
+	if err != nil {
+		return err
+	}
+	tableFilter, err := pimp.ParseTableFilter(tablesFlag)
+	if err != nil {
+		return err
 	}
 
 	dbConfig, err := cmd.Flags().GetString("dbconfig")
@@ -131,7 +149,7 @@ func importRun(cmd *cobra.Command, args []string) error {
 
 	log.Infoln("working max thread:", concurrency)
 
-	plan := pimp.NewImportPlan(ctx, path, concurrency, dbConfig, totalFile)
+	plan := pimp.NewImportPlan(ctx, path, concurrency, dbConfig, totalFile, tableFilter)
 
 	if err := plan.Estimate(); err != nil {
 		return err
@@ -140,9 +158,13 @@ func importRun(cmd *cobra.Command, args []string) error {
 	if printOnly {
 		plan.PrintCmd()
 	} else {
-		err = restoreSchema(ctx, path, dbConfig)
-		if err != nil {
-			return err
+		if skipDBCreate {
+			log.Infoln("skipping database creation (--skip-db-create)")
+		} else {
+			err = restoreSchema(ctx, path, dbConfig)
+			if err != nil {
+				return err
+			}
 		}
 		if err = plan.Execute(); err != nil {
 			return err
